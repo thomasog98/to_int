@@ -1,4 +1,102 @@
 ---
+# Mariadb persistent local volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mariadb-storage
+  labels:
+    type: local
+spec:
+  capacity:
+    storage: 5Gi
+  volumeMode: Filesystem
+  storageClassName: hostpath
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /persistent_volume_storage/cluster/mariadb
+---
+# Nextcloud persistent local volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nextcloud-storage
+  labels:
+    type: local
+spec:
+  capacity:
+    storage: 995Gi
+  volumeMode: Filesystem
+  storageClassName: hostpath
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /persistent_volume_storage/cluster/nextcloud
+---
+# Mariadb storage claim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb-storage-claim
+  namespace: backup-solution
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 5Gi
+  volumeName: mariadb-storage
+---
+# Nextcloud storage claim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nextcloud-storage-claim
+  namespace: backup-solution
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 995Gi
+  volumeName: nextcloud-storage
+---
+# Mariadb deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb-deployment
+  namespace: backup-solution
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      volumes:
+        - name: mariadb-storage-vol
+          persistentVolumeClaim:
+            claimName: mariadb-storage-claim
+      containers:
+        - name: mariadb
+          image: docker.io/library/mariadb
+          ports:
+          - containerPort: 3306
+          imagePullPolicy: Always
+          volumeMounts:
+          - mountPath: "/var/lib/mysql"
+
+            name: mariadb-storage-vol
+---
+# Nextcloud deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,45 +112,41 @@ spec:
       labels:
         app: nextcloud
     spec:
+      volumes:
+        - name: nextcloud-storage-vol
+          persistentVolumeClaim:
+            claimName: nextcloud-storage-claim
       containers:
         - name: nextcloud
-          image: docker.io/nextcloud
-          resources:
-            requests:
-              memory: "64Mi"
-              cpu: "100m"
-            limits:
-              memory: "128Mi"
-              cpu: "500m"
+          image: docker.io/library/nextcloud
           ports:
-          - containerPort: 8080
+          - containerPort: 80
           imagePullPolicy: Always
+          env:
+          - name: MYSQL_HOST
+            value: mariadb
+          - name: MYSQL_USER
+            value: nextcloud
+          - name: MYSQL_PASSWORD
+            value: nextcloud
+          - name: MYSQL_DATABASE
+            value: nextcloud
+          volumeMounts:
+            - mountPath: "/var/www/html"
+              name: nextcloud-storage-vol
 ---
+# Nodeport service to access nextcloud
 apiVersion: v1
 kind: Service
 metadata:
   name: nextcloud-service
   namespace: backup-solution
 spec:
+  type: NodePort
   ports:
-  - port: 8080
-    targetPort: 8080
+  - port: 80
+    targetPort: 80
     name: tcp
+    nodePort: 30001
   selector:
-    app: nextcloud
---------
-apiVersion: networking.k8s.io/v1beta1
-kind: Ingress
-metadata:
-  name: nextcloud-ingress
-  namespace: backup-solution
-  annotations:
-    kubernetes.io/ingress.class: "traefik"
-spec:
-  rules:
-  - http:
-      paths:
-      - path: /
-        backend:
-          serviceName: nextcloud-service
-          servicePort: 8080
+    app: "nextcloud"
