@@ -1,4 +1,46 @@
 ---
+# Config map
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nextcloud-config
+  namespace: backup-solution
+  labels:
+    app.kubernetes.io/name: nextcloud
+data:
+  POSTGRES_DB_NAME: nextclouddbs
+  POSTGRES_HOST: mariadb-service
+  POSTGRES_PG: /var/lib/postgressql/data/pgdata
+---
+# Nodeport service to access nextcloud
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-service
+  namespace: backup-solution
+spec:
+  type: NodePort
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: tcp
+  selector:
+    app: "mariadb"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nextcloud-service
+  namespace: backup-solution
+spec:
+  type: NodePort
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 80
+  selector:
+    app: "nextcloud"
+---
 # Mariadb persistent local volume
 apiVersion: v1
 kind: PersistentVolume
@@ -87,23 +129,41 @@ spec:
         - name: mariadb-storage-vol
           persistentVolumeClaim:
             claimName: mariadb-storage-claim
-        - name: mariadb-storage-conf
-          persistentVolumeClaim:
-            claimName: mariadb-storage-claim
       containers:
         - name: mariadb
-          image: docker.io/library/mariadb
+          image: postgres:14-alpine
           ports:
-          - containerPort: 3306
+          - containerPort: 5432
           imagePullPolicy: Always
           env:
-            - name: MYSQL_ROOT_PASSWORD
-              value: nextcloud
+          - name: POSTGRES_USER
+            valueFrom:
+              secretKeyRef:
+                name: nextcloud-secret
+                key: POSTGRES_USER
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: nextcloud-secret
+                key: POSTGRES_PASSWORD
+          - name: POSTGRES_DB
+            valueFrom:
+              configMapKeyRef:
+                name: nextcloud-config
+                key: POSTGRES_DB_NAME
+          - name: POSTGRES_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: nextcloud-config
+                key: POSTGRES_HOST
+          - name: POSTGRES_PG
+            valueFrom:
+              configMapKeyRef:
+                name: nextcloud-config
+                key: POSTGRES_PG
           volumeMounts:
-          - mountPath: "/var/lib/mysql"
+          - mountPath: "/var/lib/postgresql/data"
             name: mariadb-storage-vol
-          - mountPath: "/etc/mysql"
-            name: mariadb-storage-conf
 ---
 # Nextcloud deployment
 apiVersion: apps/v1
@@ -127,51 +187,32 @@ spec:
             claimName: nextcloud-storage-claim
       containers:
         - name: nextcloud
-          image: docker.io/library/nextcloud
+          image: nextcloud:23.0
           ports:
           - containerPort: 80
           imagePullPolicy: Always
           env:
-          - name: MYSQL_HOST
-            value: localhost:30000
-          - name: MYSQL_USER
-            value: nextuser_db
-          - name: MYSQL_PASSWORD
-            value: nextpass
-          - name: MYSQL_DATABASE
-            value: nextcloud
+          - name: POSTGRES_USER
+            valueFrom: 
+              secretKeyRef:
+                name: nextcloud-secret
+                key: POSTGRES_USER
+          - name: POSTGRES_PASSWORD
+            valueFrom: 
+              secretKeyRef:
+                name: nextcloud-secret
+                key: POSTGRES_PASSWORD
+          - name: POSTGRES_DB
+            valueFrom:
+              configMapKeyRef:
+                name: nextcloud-config
+                key: POSTGRES_DB_NAME
+          - name: POSTGRES_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: nextcloud-config
+                key: POSTGRES_HOST
           volumeMounts:
             - mountPath: "/var/www/html"
               name: nextcloud-storage-vol
----
-# Nodeport service to access nextcloud
-apiVersion: v1
-kind: Service
-metadata:
-  name: mariadb-service
-  namespace: backup-solution
-spec:
-  type: NodePort
-  ports:
-  - port: 3306
-    targetPort: 3306
-    name: tcp
-    nodePort: 30000
-  selector:
-    app: "mariadb"
----
-# Nodeport service to access nextcloud
-apiVersion: v1
-kind: Service
-metadata:
-  name: nextcloud-service
-  namespace: backup-solution
-spec:
-  type: NodePort
-  ports:
-  - port: 80
-    targetPort: 80
-    name: tcp
-    nodePort: 30001
-  selector:
-    app: "nextcloud"
+
